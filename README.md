@@ -1,10 +1,8 @@
-To enable the correct alignment of an automatically misaligned fiducial frame, 
-
-I generated functions in R saving the corrected data: 
+To enable the correct alignment of an automatically misaligned fiducial frame in a Visium Spatial Gene Expression Slide (6.5mmx6.5mm, 78 rows, 128 cols), I generated functions in R saving the corrected data for: 
 
 A) Tissue Positions
 
-B) Matrix Files
+B) Matrix Files (1) Folder, B) h5 file)
 
 in a wp/sample_corr/ folder, with 
 
