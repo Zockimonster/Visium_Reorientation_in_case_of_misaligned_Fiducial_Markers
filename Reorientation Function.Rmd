@@ -5,11 +5,26 @@ date: "2024-04-18"
 output: html_document
 ---
 
+For reorientation of Visium Slides with misaligned Fiducial Markers. Swap Column and / or Rows to match Fiducial Markers.
 
+A) enables reorientation of tissue positions, set save = TRUE to save corrected positions in a new folder "wp/sample_corr/outs/spatial/"
+B) Reorientation of filtered matrices
 
+- matrix_reorientation for reorientation of filtered_feature_bc_matrix folder
+- h5_rorientation for reorientation of filtered_feature_bc_matrix.h5 file
+
+C) Control by plotting Counts per Spots
+
+A) Reorientation of tissue positions to Fiducial Markers
+wp = data directory
+sample = name of sample folder
+mirror_row, if fiducial frame should be only swapped at row axis -> TRUE
+mirror_col, if fiducial frame should be only swapped at column axis -> TRUE
+mirror_row_col, if fiducial frame should be swapped at row & column axis -> TRUE
+save, if the corrected tissue position file should be saved in a new folder "wp/sample_corr/outs/spatial/" -> TRUE
 
 ```{r}
-### Reorientation of tissue positions to Fiducial Markers
+
 library(tidyverse)
 reorientation_function <- function(wp=NULL, sample=NULL, tp_file="tissue_positions.csv", mirror_row=NULL, mirror_col =NULL, mirror_row_col=NULL, plot=TRUE, save=FALSE){
   # Load data
@@ -79,12 +94,13 @@ reorientation_function <- function(wp=NULL, sample=NULL, tp_file="tissue_positio
      write.csv(tp, paste0(wp, sample ,"_corr/outs/spatial/tissue_positions_list.csv"), row.names = FALSE) 
   }
 return(tp)}
+
 ```
 
 
 
 
-### Reorientation of the filtered matrices
+B) Reorientation of the filtered matrices
 
 **After** correction of tissue positions!
 
@@ -101,7 +117,14 @@ To obtain the corrected h5 matrix, the corrected filtered mtx matrix will be use
 The uncorrected filtered h5 matrix was used, to obtain the list of features as well as the shape, since those parameters don't change, if the tissue position arrangement changes.
 
 
+1) Correction of filtered matrix folder
+wp = data directory
+sample = name of sample folder
+new_tp_file = name of new tissue position file, expected in "wp/sample_corr/outs/spatial/" folder
+save, if the corrected filtered matrix folder should be saved in the folder "wp/sample_corr/outs/" -> TRUE
+
 ```{r}
+
 library(Matrix)
 matrix_correction <- function(wp=NULL, sample=NULL, new_tp_file="tissue_positions_list.csv", save=FALSE){
   # Load the corrected tissue positions
@@ -140,11 +163,13 @@ matrix_correction <- function(wp=NULL, sample=NULL, new_tp_file="tissue_position
   write_tsv(as.data.frame(rownames(filtered_matrix)),features.new, col_names = FALSE)}
 return(filtered_matrix)
   }
+
 ```
 
-h5 correction
+2) Correction of h5 matrix file
 
 ```{r}
+
 h5_correction <- function(wp=NULL, sample=NULL, new_tp_file="tissue_positions_list.csv",filtered_matrix_corrected=FALSE, save=FALSE){
   # Load corrected tissue positions
   tp <- read.csv(paste0(wp, sample, "_corr/outs/spatial/", new_tp_file))
@@ -232,16 +257,18 @@ h5_correction <- function(wp=NULL, sample=NULL, new_tp_file="tissue_positions_li
   }
   return(new_filtered)
   }
+
 ```
 
 
 
-### Control
+C) Control
 
 To check whether the spot reorientation produced a correct orientation of the spots, the number of total counts for each spot can be compared, using the uncorrected vs. the corrected array positions. 
 To align the array positions with the tissue position, $max(array|row)-array|row$ has been used.
 
 ```{r}
+
 control_reorientation <- function(wp=NULL, sample=NULL,  tp_file="tissue_positions_list.csv", new_tp_file="tissue_positions_list.csv"){
   # Load uncorrected and corrected tissue positions and the low resolution image
   tp_old <- read.csv(paste0(wp, sample, "/outs/spatial/", tp_file)) 
