@@ -1,0 +1,305 @@
+---
+title: "Reorientation Function"
+author: "E.S."
+date: "2024-04-18"
+output: html_document
+---
+
+
+
+
+```{r}
+### Reorientation of tissue positions to Fiducial Markers
+library(tidyverse)
+reorientation_function <- function(wp=NULL, sample=NULL, tp_file="tissue_positions.csv", mirror_row=NULL, mirror_col =NULL, mirror_row_col=NULL, plot=TRUE, save=FALSE){
+  # Load data
+  tp_old <- read.csv(paste0(wp, sample,"/outs/spatial/", tp_file)) 
+  tp <- tp_old %>% select(1:4)
+  not_to_be_changed <- tp_old %>% select(5:6)
+  # Change the array
+  if (mirror_col==TRUE){
+  # MIRROR_COL
+  # Swap in_tissue positions by array_col axis
+  tp <- tp %>% add_column(., "pseudo_col" = max(.$array_col)-.$array_col, .after = 4) %>% 
+  .[order(.$array_row, desc(.$array_col)),]
+  # Reorder the in tissue column
+  tp["in_tissue"] <- tp %>% .[order(.$array_row, desc(.$pseudo_col)), 2]
+  tp$pseudo_col <- NULL
+  tp <- cbind(tp, not_to_be_changed)
+  } else if (mirror_row==TRUE){
+    # MIRROR_ROW
+  # Swap in_tissue positions by array_row axis
+  tp <- tp %>% add_column(., "pseudo_row" = max(.$array_row)-.$array_row, .after = 3) %>%
+  .[order(.$array_col, .$array_row, decreasing = TRUE),]
+  # Reorder in tissue column
+  tp["in_tissue"] <- tp %>% .[order(.$array_col, .$pseudo_row, decreasing=T), 2]
+  tp$pseudo_row <- NULL
+  tp <- cbind(tp, not_to_be_changed)
+  }else if(mirror_row_col == TRUE){
+    # MIRROR_ROW_COL
+  # Swap in_tissue positions by array_col axis
+  tp <- tp %>% add_column(., "pseudo_col" = max(.$array_col)-.$array_col, .after = 4) %>% 
+  .[order(.$array_row, desc(.$array_col)),]
+  # Reorder the in tissue column
+  tp["in_tissue"] <- tp %>% .[order(.$array_row, desc(.$pseudo_col)), 2]
+  tp$pseudo_col <- NULL
+  # Swap in_tissue positions by array_row axis
+  tp <- tp %>% add_column(., "pseudo_row" = max(.$array_row)-.$array_row, .after = 3) %>%
+  .[order(.$array_col, .$array_row, decreasing = TRUE),]
+  # Reorder in tissue column
+  tp["in_tissue"] <- tp %>% .[order(.$array_col, .$pseudo_row, decreasing=T), 2]
+  tp$pseudo_row <- NULL
+  tp <- cbind(tp, not_to_be_changed)
+  }
+  if (plot==TRUE && all(c("ggplot2", "patchwork") %in% installed.packages())){
+    library(ggplot2)
+    library(patchwork)
+  print(wrap_plots(tp_old %>% ggplot(aes(array_row, array_col, color=as.factor(in_tissue))) +
+    geom_point() + ggtitle("Raw Spot Positions") + scale_color_manual(values=c("0"="darkgrey","1"="blue"))+ 
+    theme(legend.position = "none"),
+  tp %>% ggplot(aes(array_row, array_col, color=as.factor(in_tissue))) + geom_point() +
+    ggtitle("Corrected Spot Positions") + scale_color_manual(values=c("0"="darkgrey","1"="blue")) +
+    theme(plot.title = element_text(size = 12), legend.position = "none"), ncol = 2))
+  } else {
+    par(mfrow=c(1,2))
+  col_tp <- rep(NA, length=nrow(tp_old[[i]]))
+  col_tp[which(tp_old$in_tissue == "1")] <- "blue"
+  col_tp[which(tp_old$in_tissue=="0")] <- "darkgrey"
+    plot(tp_old$array_row, tp_old$array_col, col=col_tp, main="Raw Spot Positions")
+  col_tp <- rep(NA, length=nrow(tp[[i]]))
+  col_tp[which(tp$in_tissue == "1")] <- "blue"
+  col_tp[which(tp$in_tissue=="0")] <- "darkgrey"
+    plot(tp$array_row, tp$array_col, col=col_tp, main="Corrected Spot Positions")
+    dev.off()
+  }
+  if (save==TRUE){
+        ifelse(!dir.exists(paste0(wp, sample, "_corr/")), 
+           dir.create(paste0(wp, sample, "_corr/")) && dir.create(paste0(wp, sample, "_corr/outs/")) && dir.create(paste0(wp, sample, "_corr/outs/spatial/")),
+           print(paste0("The corrected tissue position file will be within the ", sample, "_corr/outs/spatial folder in wp")))
+     write.csv(tp, paste0(wp, sample ,"_corr/outs/spatial/tissue_positions_list.csv"), row.names = FALSE) 
+  }
+return(tp)}
+```
+
+
+
+
+### Reorientation of the filtered matrices
+
+**After** correction of tissue positions!
+
+1) MTX Matrix
+Load the raw matrix according to the Company's website [Visium: Load Matrix into R](https://www.10xgenomics.com/support/software/space-ranger/latest/analysis/outputs/space-ranger-feature-barcode-matrices), 20.04.2024
+
+Subset the raw matrices to ens codes within the filtered matrix, using the filtered feature.tsv.gz. 
+Afterwards subset the so filtered matrix to spots within the tissue using the corrected tissue positions lists.
+Save the corrected filtered matrices and the new barcodes.
+The feature list is similar to the feature list of the uncorrected filtered matrix, since the list of features hasn't changed.
+
+2) H5 Matrix
+To obtain the corrected h5 matrix, the corrected filtered mtx matrix will be used, to obtain data (x), indices (i) and to calculate indptr for the h5 matrix.
+The uncorrected filtered h5 matrix was used, to obtain the list of features as well as the shape, since those parameters don't change, if the tissue position arrangement changes.
+
+
+```{r}
+library(Matrix)
+matrix_correction <- function(wp=NULL, sample=NULL, new_tp_file="tissue_positions_list.csv", save=FALSE){
+  # Load the corrected tissue positions
+  tp <- read.csv(paste0(wp, sample, "_corr/outs/spatial/", new_tp_file)) 
+  # Load the filtered genes
+  filtered_feature_file <- paste0(wp, sample,"/outs/filtered_feature_bc_matrix/features.tsv.gz")
+  filtered_genes <- read.delim(filtered_feature_file,header = FALSE, stringsAsFactors = FALSE)
+  # Load the raw matrix
+  raw_matrix_dir <- paste0(wp, sample,"/outs/raw_feature_bc_matrix/")
+  matrix.raw <- paste0(raw_matrix_dir, "matrix.mtx.gz")
+  barcodes.raw <- paste0(raw_matrix_dir, "barcodes.tsv.gz")
+  features.raw <- paste0(raw_matrix_dir, "features.tsv.gz")
+  raw_matrix <- readMM(file = matrix.raw)
+  feature.names <- read.delim(features.raw, header = FALSE, stringsAsFactors = FALSE)
+  barcode.names = read.delim(barcodes.raw, header = FALSE, stringsAsFactors = FALSE)
+  colnames(raw_matrix) = barcode.names$V1
+  rownames(raw_matrix) = feature.names$V1
+  # Subset filtered_matrix
+  filtered_matrix <- raw_matrix[rownames(raw_matrix) %in% filtered_genes$V1,]
+  tp_in <- tp[tp$in_tissue==1,1]
+  filtered_matrix <- filtered_matrix[,colnames(filtered_matrix) %in% tp_in]
+  # path to the directory, where the corrected filtered mtx matrix should be saved
+  corrected_filtered_matrix_dir  <- paste0(wp, sample, "_corr/outs/filtered_feature_bc_matrix/")
+  # Save the corrected filtered matrix 
+  matrix.new <- paste0(corrected_filtered_matrix_dir, "matrix.mtx.gz")
+  barcodes.new <- paste0(corrected_filtered_matrix_dir, "barcodes.tsv.gz")
+  features.new <- paste0(corrected_filtered_matrix_dir, "features.tsv.gz")
+  if (save==TRUE){
+    ifelse(!dir.exists(paste0(wp, sample, "_corr/")), 
+           dir.create(paste0(wp, sample, "_corr/")) && dir.create(paste0(wp, sample, "_corr/outs/")),
+           print(paste0("filtered_feature_bc_matrix will be within the ", sample, "_corr/outs/ folder")))
+      # corrected filtered matrix as mtx.gz file
+  writeMM(filtered_matrix, matrix.new)
+  # corrected barcodes (colnames(filtered_matrix)) as tsv.gz file
+  write_tsv(as.data.frame(colnames(filtered_matrix)),barcodes.new, col_names = FALSE)
+  write_tsv(as.data.frame(rownames(filtered_matrix)),features.new, col_names = FALSE)}
+return(filtered_matrix)
+  }
+```
+
+h5 correction
+
+```{r}
+h5_correction <- function(wp=NULL, sample=NULL, new_tp_file="tissue_positions_list.csv",filtered_matrix_corrected=FALSE, save=FALSE){
+  # Load corrected tissue positions
+  tp <- read.csv(paste0(wp, sample, "_corr/outs/spatial/", new_tp_file))
+  if (filtered_matrix_corrected==TRUE){
+      # Load h5 matrices
+  rm_h5 <- h5read(paste0(wp, sample,"/outs/raw_feature_bc_matrix.h5"), name="matrix") 
+  # Load corrected filtered matrix
+  matrix_dir <- paste0(wp, sample,"_corr/outs/filtered_feature_bc_matrix/")
+  matrix <- paste0(matrix_dir, "matrix.mtx.gz")
+  barcodes <- paste0(matrix_dir, "barcodes.tsv.gz")
+  features <- paste0(matrix_dir, "features.tsv.gz")
+  filtered_matrix <- readMM(file = matrix)
+  feature.names <- read.delim(features, header = FALSE, stringsAsFactors = FALSE)
+  barcode.names = read.delim(barcodes, header = FALSE, stringsAsFactors = FALSE)
+  colnames(filtered_matrix) = barcode.names$V1
+  rownames(filtered_matrix) = feature.names$V1
+  # Calculate indptr
+  spot_counts <- colSums(filtered_matrix>0)
+  indptr <- c(0)
+  for (i in 1:length(spot_counts)){
+    indptr <- list.append(indptr, sum(spot_counts[1:i]))}
+  # Approach without using the filtered h5 matrix
+  new_filtered <- list()
+  new_filtered$barcodes <- rm_h5$barcodes[rm_h5$barcodes %in% tp_in]
+  new_filtered$data <- filtered_matrix@x
+  new_filtered$features <- list()
+  new_filtered$features$"_all_tag_keys" <- rm_h5$features$"_all_tag_keys"
+  # To subset the raw h5 matrix to the features in the filtered matrix
+  index <- rm_h5$features$id %in% rownames(filtered_matrix)
+  new_filtered$features$feature_type <- rm_h5$features$feature_type[index]
+  new_filtered$features$genome <- rm_h5$features$genome[index]
+  new_filtered$features$id <- rm_h5$features$id[index]
+  new_filtered$features$name <- rm_h5$features$name[index]
+  new_filtered$features$target_sets <- rm_h5$features$target_sets
+  new_filtered$indices <- filtered_matrix@i
+  new_filtered$indptr <- indptr
+  new_filtered$shape <- filtered_matrix@Dim
+  }
+  if (filtered_matrix_corrected==FALSE){
+       # Load the filtered genes
+  filtered_feature_file <- paste0(wp, sample,"/outs/filtered_feature_bc_matrix/features.tsv.gz")
+  filtered_genes <- read.delim(filtered_feature_file,header = FALSE, stringsAsFactors = FALSE)
+  # Load the raw matrix
+  raw_matrix_dir <- paste0(wp, sample,"/outs/raw_feature_bc_matrix/")
+  matrix.raw <- paste0(raw_matrix_dir, "matrix.mtx.gz")
+  barcodes.raw <- paste0(raw_matrix_dir, "barcodes.tsv.gz")
+  features.raw <- paste0(raw_matrix_dir, "features.tsv.gz")
+  raw_matrix <- readMM(file = matrix.raw)
+  feature.names <- read.delim(features.raw, header = FALSE, stringsAsFactors = FALSE)
+  barcode.names = read.delim(barcodes.raw, header = FALSE, stringsAsFactors = FALSE)
+  colnames(raw_matrix) = barcode.names$V1
+  rownames(raw_matrix) = feature.names$V1
+  # Subset filtered_matrix
+  filtered_matrix <- raw_matrix[rownames(raw_matrix) %in% filtered_genes$V1,]
+  tp_in <- tp[tp$in_tissue==1,1]
+  filtered_matrix <- filtered_matrix[,colnames(filtered_matrix) %in% tp_in]
+  # Load h5 matrices
+  rm_h5 <- h5read(paste0(wp, sample,"/outs/raw_feature_bc_matrix.h5"), name="matrix") 
+  fm_h5 <- h5read(paste0(wp, sample,"/outs/filtered_feature_bc_matrix.h5"), name="matrix") 
+  # Calculate indptr
+  spot_counts <- colSums(filtered_matrix>0)
+  indptr <- c(0)
+  for (i in 1:length(spot_counts)){
+    indptr <- list.append(indptr, sum(spot_counts[1:i]))}
+  # Approach with using the filtered h5 matrix
+  new_filtered <- list()
+  tp_in <- tp[tp$in_tissue==1,1]
+  new_filtered$barcodes <- rm_h5$barcodes[rm_h5$barcodes %in% tp_in]
+  new_filtered$data <- filtered_matrix@x
+  new_filtered$features <- list()
+  new_filtered$features$"_all_tag_keys" <- fm_h5$features$"_all_tag_keys"
+  new_filtered$features$feature_type <- fm_h5$features$feature_type
+  new_filtered$features$genome <- fm_h5$features$genome
+  new_filtered$features$id <- fm_h5$features$id
+  new_filtered$features$name <- fm_h5$features$name
+  new_filtered$features$target_sets <- fm_h5$features$target_sets
+  new_filtered$indices <- filtered_matrix@i
+  new_filtered$indptr <- indptr
+  new_filtered$shape <- fm_h5$shape
+  }
+  if (save==TRUE){
+  H5Fcreate(paste0(wp, sample, "_corr/outs/filtered_feature_bc_matrix.h5"))
+  h5closeAll()
+  h5write(new_filtered, paste0(wp, sample, "_corr/outs/filtered_feature_bc_matrix.h5"), name="matrix")
+  }
+  return(new_filtered)
+  }
+```
+
+
+
+### Control
+
+To check whether the spot reorientation produced a correct orientation of the spots, the number of total counts for each spot can be compared, using the uncorrected vs. the corrected array positions. 
+To align the array positions with the tissue position, $max(array|row)-array|row$ has been used.
+
+```{r}
+control_reorientation <- function(wp=NULL, sample=NULL,  tp_file="tissue_positions_list.csv", new_tp_file="tissue_positions_list.csv"){
+  # Load uncorrected and corrected tissue positions and the low resolution image
+  tp_old <- read.csv(paste0(wp, sample, "/outs/spatial/", tp_file)) 
+  tp_new <- read.csv(paste0(wp, sample, "_corr/outs/spatial/", new_tp_file))
+  # Combine the uncorrected vs. corrected localization within the array
+  tp_compared <- merge(tp_old[, 1:4], tp_new[,1:4], 
+                by=c("barcode", "array_row", "array_col"), suffixes=c("_uncorr", "_corr"))
+  tp_compared <- cbind(tp_compared, "in_tissue_compared" = rowSums(tp_compared[,
+                c("in_tissue_uncorr", "in_tissue_corr")]))
+  tissue_list <- c()
+  for (row in 1:nrow(tp_compared))
+    tissue_list <- list.append(tissue_list, if(tp_compared$in_tissue_compared[row] == 1 &
+                                               tp_compared$in_tissue_uncorr[row] == 1){
+      "U"
+    }else if((tp_compared$in_tissue_compared[row] == 1 & tp_compared$in_tissue_corr[row] == 1)){
+      "C"
+    }else{
+     tp_compared$in_tissue_compared[row]})
+  tp_compared["in_tissue_compared"] <- tissue_list
+  # Load the raw matrix
+  raw_matrix_dir <- paste0(wp, sample,"/outs/raw_feature_bc_matrix/")
+  matrix.raw <- paste0(raw_matrix_dir, "matrix.mtx.gz")
+  barcodes.raw <- paste0(raw_matrix_dir, "barcodes.tsv.gz")
+  features.raw <- paste0(raw_matrix_dir, "features.tsv.gz")
+  # load the raw matrix.mtx.gz
+  raw_matrix <- readMM(file = matrix.raw)
+  # load the raw feature.tsv.gz
+  feature.names <- read.delim(features.raw, header = FALSE, stringsAsFactors = FALSE)
+  # load the raw barcodes.tsv.gz
+  barcode.names = read.delim(barcodes.raw, header = FALSE, stringsAsFactors = FALSE)
+  # set colnumn names to the barcodes in the array                         
+  colnames(raw_matrix) = barcode.names$V1
+  # and the row names to the raw features of the array   
+  rownames(raw_matrix) = feature.names$V1
+  # Calculate Counts per Spot (CPS)
+  counts_per_spot <- data.frame("barcode" = colnames(raw_matrix), "cps" = colSums(raw_matrix))
+  cps_old <- merge(tp_old, counts_per_spot, by="barcode")
+  cps_new <- merge(tp_new, counts_per_spot, by="barcode")
+  rows <- 0:77
+  columns <- 0:127
+  # Comparison of TP and CPS
+  # TP
+  plot_tp <- tp_compared %>% ggplot(aes(max(array_row)-array_row, array_col, color= as.factor(in_tissue_compared))) + geom_point(size=2) + ggtitle(paste0("TP Compared")) + scale_color_manual(values=c("0"="darkgrey","2"="gold1","U"="darkorange","C"="blue"), name="Spot", labels=c("0"="Not in Both","2"="In Both","U"="Only uncorrected","C"="Only corrected")) + theme(legend.text=element_text(size=8))
+  # CPS uncorrected
+  plot_uncorr <- cps_old %>% filter(in_tissue==1) %>% ggplot(aes(max(array_row)-array_row, array_col, color = cps)) + geom_point() + ggtitle("CPS: TP_uncorrected") + scale_colour_gradientn(colours = c("blue", "white", "yellow"))
+  # CPS corrected
+plot_corr <- cps_new %>% filter(in_tissue==1) %>% ggplot(aes(max(array_row)-array_row, array_col, color = cps)) + geom_point() + ggtitle("CPS: TP_corrected") + scale_colour_gradientn(colours = c("blue", "white", "yellow"))
+compare_tp <- grid.arrange(plot_image, plot_tp,  plot_uncorr, plot_corr, ncol=2)
+print(compare_tp)
+# Save graph
+#  ggsave(paste0(wp, sample, "_corr/outs/spatial/compare_tp_uncorr_corr.png"), plot = compare_tp, width =18, height = 12, units = "cm")
+}
+
+```
+
+As seen in the plots, spots with a high number of counts correlate with spots assigned to be in the tissue (`1`) as well as with histological structures within the tissue, which undergirds also that the barcodes within the array were captured at correct barcode positions to align with the image, if the symbols were correct detected.
+
+
+
+
+
